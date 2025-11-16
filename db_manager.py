@@ -7,6 +7,12 @@ from dotenv import load_dotenv
 import psycopg2
 from urllib.parse import urlparse
 from cassandra.cluster import Cluster
+import logging
+from log_config import setup_logging
+
+# Asegurar configuración de logging (log_config ya configura en import)
+setup_logging()
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -35,9 +41,11 @@ class DatabaseManager:
                 host=result.hostname,
                 port=result.port
             )
+            logger.info("Conectado a PostgreSQL: host=%s db=%s user=%s",
+                        result.hostname, result.path[1:], result.username)
             return True
         except Exception as e:
-            print(f"❌ Error conectando a PostgreSQL: {e}")
+            logger.exception("Error conectando a PostgreSQL: %s", e)
             return False
     
     def connect_cassandra(self):
@@ -128,7 +136,7 @@ class DatabaseManager:
             
             return True
         except Exception as e:
-            print(f"❌ Error conectando a Cassandra: {e}")
+            logger.exception("Error conectando a Cassandra: %s", e)
             return False
     
     def connect_mongodb(self):
@@ -144,10 +152,10 @@ class DatabaseManager:
             # Probar la conexión
             self.mongodb_client.server_info()
             self.mongodb_db = self.mongodb_client[database_name]
-            
+            logger.info("MongoDB conectado: database=%s", database_name)
             return True
         except Exception as e:
-            print(f"❌ Error conectando a MongoDB: {e}")
+            logger.exception("Error conectando a MongoDB: %s", e)
             return False
     
     def connect_neo4j(self):
@@ -168,7 +176,7 @@ class DatabaseManager:
             
             return True
         except Exception as e:
-            print(f"❌ Error conectando a Neo4j: {e}")
+            logger.exception("Error conectando a Neo4j: %s", e)
             return False
         """Conectar a Cassandra"""
         try:
@@ -298,7 +306,7 @@ class DatabaseManager:
             if self.neo4j_driver:
                 self.neo4j_driver.close()
         except Exception as e:
-            print(f"⚠️  Error cerrando conexiones: {e}")
+            logger.exception("Error cerrando conexiones: %s", e)
 
 
 # Instancia global

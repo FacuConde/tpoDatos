@@ -6,6 +6,10 @@ Sistema de consultas para bases de datos del Mundial
 import os
 from dotenv import load_dotenv
 from db_manager import db_manager
+import redis
+import json
+from datetime import datetime
+from typing import Optional, Dict, Any
 from etl_manager import ETLManager
 
 # Cargar variables de entorno
@@ -393,11 +397,241 @@ class FIFAQuerySystem:
         periodista = input("\n👤 Ingrese el nombre del periodista: ")
         
         print(f"\n🔍 Iniciando sesión de 2 horas para {periodista}...")
-        print("\n⏳ [Funcionalidad por implementar]")
-        print("\n💡 Se registrará el acceso con TTL de 2 horas en Redis")
-        print("💡 Se mostrarán estadísticas y datos relevantes en tiempo real")
+
+        # Conectar a Redis usando REDIS_URL o host/port
+        try:
+            redis_url = os.getenv('REDIS_URL') or os.getenv('REDIS_URI')
+            if redis_url:
+                r = redis.from_url(redis_url, decode_responses=True)
+                print(f"Redis: usando REDIS_URL -> {redis_url}")
+            else:
+                host = os.getenv('REDIS_HOST', 'localhost')
+                port = int(os.getenv('REDIS_PORT', 6379))
+                pwd = os.getenv('REDIS_PASSWORD', None)
+                db = int(os.getenv('REDIS_DB', 0))
+                r = redis.Redis(host=host, port=port, password=pwd, db=db, decode_responses=True)
+
+            # Buscar sesiones existentes para este periodista
+            # Use a helper to read the session
+            matches = self._find_journalist_sessions(r, periodista)
+
+            if matches:
+                print(f"\n🔎 Se encontraron {len(matches)} sesión(es) para {periodista}:")
+                for match in matches:
+                    val = match.get('value')
+                    name = None
+                    # extraer nombre desde dict si es posible
+                    if isinstance(val, dict):
+                        name = val.get('nombre') or val.get('user') or val.get('periodista_id') or val.get('email')
+                    else:
+                        # intentar parsear JSON si es string
+                        try:
+                            if isinstance(val, str):
+                                parsed = json.loads(val)
+                                if isinstance(parsed, dict):
+                                    name = parsed.get('nombre') or parsed.get('user') or parsed.get('periodista_id') or parsed.get('email')
+                        except Exception:
+                            name = None
+
+                    if not name:
+                        name = '<desconocido>'
+
+                    ttl = match.get('ttl')
+                    print(f"  • {name} — TTL: {ttl}s")
+                
+                # Ofrecer renovar TTL de la sesión más reciente
+                renovar = input("\n¿Renovar TTL de la sesión más reciente (7200s)? (s/n): ").strip().lower()
+                key_to_manage = matches[0]['key']
+                if renovar in ('s', 'si', 'y', 'yes'):
+                    r.expire(key_to_manage, 7200)
+                    print(f"✅ TTL renovada para la sesión más reciente (7200s)")
+                else:
+                    r.delete(key_to_manage)
+                    print(f"🗑️ {key_to_manage} finalizada correctamente.")
+            else:
+                print(f"\n⚠️  No existen sesiones activas para {periodista}.")
+                crear = input("¿Desea crear una sesión ahora? (s/n): ").strip().lower()
+                if crear in ('s', 'si', 'y', 'yes'):
+                    # Normalizar nombre para clave determinista y evitar duplicados accidentales
+                    normalized = periodista.strip().lower().replace(' ', '_')
+                    key = f"session:{normalized}"
+                    # Si por algún motivo existe, preguntar antes de sobrescribir
+                    if r.exists(key):
+                        sobrescribir = input(f"Ya existe la clave {key}. ¿Renovar TTL en su lugar? (s/n): ").strip().lower()
+                        if sobrescribir in ('s', 'si', 'y', 'yes'):
+                            r.expire(key, 7200)
+                            print(f"✅ TTL renovada para {key} (7200s)")
+                        else:
+                            # crear con timestamp si el usuario insiste en nueva sesión
+                            key = f"session:{normalized}:{int(datetime.utcnow().timestamp())}"
+                            payload = {
+                                'user': periodista,
+                                'start_utc': datetime.utcnow().isoformat(),
+                                'duration_sec': 7200
+                            }
+                            r.setex(key, 7200, json.dumps(payload))
+                            print(f"✅ Sesión creada: {key} (TTL 7200s)")
+                    else:
+                        payload = {
+                            'user': periodista,
+                            'start_utc': datetime.utcnow().isoformat(),
+                            'duration_sec': 7200
+                        }
+                        r.setex(key, 7200, json.dumps(payload))
+                        print(f"✅ Sesión creada: {key} (TTL 7200s)")
+                        print("💡 Puedes volver a consultar la sesión desde este menú para ver su TTL y valor.")
+                
+            # Calcular cuántas sesiones activas (TTL>0) existen en Redis
+            total_active = 0
+            try:
+                all_patterns = ['session:*', 'sesion:*', 'session:periodista:*', 'sesion:periodista:*']
+                seen = set()
+                for p in all_patterns:
+                    try:
+                        for k in r.keys(p):
+                            # normalizar key a str
+                            if isinstance(k, bytes):
+                                try:
+                                    k = k.decode('utf-8')
+                                except Exception:
+                                    k = str(k)
+
+                            if k in seen:
+                                continue
+                            seen.add(k)
+
+                            try:
+                                ttl_k = int(r.ttl(k))
+                            except Exception:
+                                ttl_k = -2
+
+                            if ttl_k > 0:
+                                total_active += 1
+                    except Exception:
+                        continue
+            except Exception:
+                total_active = 0
+
+            print(f"\n📊 Sesiones totales activas: {total_active}")
+
+        except Exception as e:
+            print(f"\n❌ Error conectando/consultando Redis: {type(e).__name__}: {e}")
+            # no abortar el flujo
         
         input("\n\nPresione ENTER para continuar...")
+
+    def _find_journalist_sessions(self, r: redis.Redis, periodista: str):
+        """Buscar sesiones de periodista en Redis.
+
+        - Busca claves que empiecen por `session:` o `sesion:`.
+        - Inspecciona el valor (intenta parsear JSON) y compara por `nombre`, `periodista_id` o `email`.
+        - Retorna lista de diccionarios con `key`, `ttl`, `type`, `value` y `match_by`.
+        """
+        patterns = ["session:*", "sesion:*", "session:periodista:*", "sesion:periodista:*"]
+        matches = []
+        seen_keys = set()  # ← SOLUCIÓN: Evitar duplicados
+
+        search = periodista.strip().lower()
+        if not search:
+            return []
+
+        for pat in patterns:
+            try:
+                keys = list(r.keys(pat))
+            except Exception:
+                keys = []
+
+            for key in keys:
+                # Convertir key a string
+                if isinstance(key, bytes):
+                    try:
+                        key = key.decode('utf-8')
+                    except Exception:
+                        key = str(key)
+                
+                # ← SOLUCIÓN: Si ya procesamos esta key, saltarla
+                if key in seen_keys:
+                    continue
+                    
+                try:
+                    t = r.type(key)
+                    val = None
+                    parsed = None
+
+                    if t == 'string' or t == b'string':
+                        val = r.get(key)
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8', errors='ignore')
+                        try:
+                            parsed = json.loads(val)
+                        except Exception:
+                            parsed = None
+                    elif t == 'hash' or t == b'hash':
+                        parsed = r.hgetall(key)
+                    elif t == 'list' or t == b'list':
+                        parsed = r.lrange(key, 0, -1)
+                    else:
+                        val = r.get(key)
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8', errors='ignore')
+
+                    matched = False
+                    match_by = None
+
+                    # Buscar en el contenido del JSON
+                    if parsed and isinstance(parsed, dict):
+                        nombre = str(parsed.get('nombre', '')).lower()
+                        pid = str(parsed.get('periodista_id', '')).lower()
+                        email = str(parsed.get('email', '')).lower()
+                        
+                        if search in nombre:
+                            matched = True
+                            match_by = 'nombre'
+                        elif search == pid:
+                            matched = True
+                            match_by = 'periodista_id'
+                        elif search in email:
+                            matched = True
+                            match_by = 'email'
+
+                    # Solo buscar en la key si NO encontró match en el contenido
+                    # Esto evita duplicados cuando el nombre está en ambos lugares
+                    if not matched:
+                        key_lower = key.lower()
+                        # Buscar el nombre en la parte del token
+                        # Ejemplo: sesion:periodista:mazzei_gf_token
+                        if search in key_lower:
+                            matched = True
+                            match_by = 'key'
+
+                    if matched:
+                        # Obtener TTL y sólo considerar sesiones activas (TTL > 0)
+                        ttl = r.ttl(key)
+                        # Algunos servidores/devs pueden devolver -2 (no existe) o -1 (no tiene TTL)
+                        # Para el caso de "sesiones activas" queremos sólo TTL positivos (ej. SETEX)
+                        try:
+                            ttl_int = int(ttl)
+                        except Exception:
+                            ttl_int = -2
+
+                        if ttl_int <= 0:
+                            # No es una sesión activa con TTL, saltarla
+                            continue
+
+                        seen_keys.add(key)
+                        matches.append({
+                            'key': key,
+                            'ttl': ttl_int,
+                            'type': t,
+                            'value': parsed or val,
+                            'match_by': match_by
+                        })
+                except Exception:
+                    continue
+
+        # Ordenar por TTL descendente
+        matches.sort(key=lambda m: m.get('ttl', 0), reverse=True)
+        return matches
     
     def camino_eliminacion(self):
         """Caso de uso 8: Camino corto de eliminación entre dos selecciones"""
