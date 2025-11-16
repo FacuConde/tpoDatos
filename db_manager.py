@@ -41,8 +41,6 @@ class DatabaseManager:
                 host=result.hostname,
                 port=result.port
             )
-            logger.info("Conectado a PostgreSQL: host=%s db=%s user=%s",
-                        result.hostname, result.path[1:], result.username)
             return True
         except Exception as e:
             logger.exception("Error conectando a PostgreSQL: %s", e)
@@ -155,7 +153,6 @@ class DatabaseManager:
             logger.info("MongoDB conectado: database=%s", database_name)
             return True
         except Exception as e:
-            logger.exception("Error conectando a MongoDB: %s", e)
             return False
     
     def connect_neo4j(self):
