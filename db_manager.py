@@ -43,7 +43,6 @@ class DatabaseManager:
             )
             return True
         except Exception as e:
-            logger.exception("Error conectando a PostgreSQL: %s", e)
             return False
     
     def connect_cassandra(self):
@@ -134,7 +133,6 @@ class DatabaseManager:
             
             return True
         except Exception as e:
-            logger.exception("Error conectando a Cassandra: %s", e)
             return False
     
     def connect_mongodb(self):
@@ -150,7 +148,6 @@ class DatabaseManager:
             # Probar la conexión
             self.mongodb_client.server_info()
             self.mongodb_db = self.mongodb_client[database_name]
-            logger.info("MongoDB conectado: database=%s", database_name)
             return True
         except Exception as e:
             return False
@@ -173,7 +170,6 @@ class DatabaseManager:
             
             return True
         except Exception as e:
-            logger.exception("Error conectando a Neo4j: %s", e)
             return False
         """Conectar a Cassandra"""
         try:
