@@ -19,7 +19,7 @@ PostgreSQL (Supabase)     →    ETL Manager    →    Cassandra / MongoDB / Neo
 - **Cassandra**: Consultas de alto rendimiento con modelos denormalizados
 - **MongoDB**: Documentos con estructuras anidadas y arrays
 - **Neo4j**: Grafos para análisis de relaciones entre selecciones
-- **Redis**: (Pendiente) Gestión de sesiones con TTL
+- **Redis**: Cache y gestión de sesiones con TTL automático
 
 ## 🚀 Casos de Uso Implementados
 
@@ -59,11 +59,18 @@ Ranking de goles anotados por cada selección en una edición.
 - **Tabla**: `goles_seleccion_edicion`
 - **Ordenamiento**: Por cantidad de goles (descendente)
 
-### 7. Sesión de Periodista (Pendiente - Redis)
-Gestión de sesión de usuario con TTL de 2 horas.
+### 7. Sesión de Periodista (PostgreSQL → Redis)
+Gestión de sesiones de usuarios periodistas con TTL (Time To Live) de 2 horas.
 - **Base destino**: Redis
 - **TTL**: 7200 segundos (2 horas)
-- **Estado**: ⏳ Pendiente de implementación
+- **Funcionalidades**:
+  - Crear nueva sesión para un periodista
+  - Buscar sesiones activas por nombre
+  - Renovar TTL de sesiones existentes
+  - Eliminar sesiones manualmente
+  - Contador de sesiones totales activas
+- **Estructura de clave**: `sesion:periodista:{nombre_normalizado}_token`
+- **Payload**: JSON con información del periodista
 
 ### 8. Camino de Eliminación (PostgreSQL → Neo4j)
 Encuentra el camino más corto entre dos selecciones en fase eliminatoria usando teoría de grafos.
@@ -364,21 +371,22 @@ MATCH (n) DETACH DELETE n
 ## 📝 Notas Importantes
 
 - El archivo `.env` contiene credenciales sensibles. **NO SUBIR A GIT**
-- El caso de uso 7 (Redis) está pendiente de implementación
+- Todos los 9 casos de uso están implementados y funcionales
 - Las tablas Cassandra se crean automáticamente al ejecutar cada caso de uso
 - Neo4j limpia y recarga datos en cada ejecución del caso de uso 8
 - MongoDB usa `replace_one` con `upsert=True` para evitar duplicados
+- Redis gestiona sesiones con expiración automática (TTL)
 
 ## 🔮 Futuras Mejoras
 
-- [ ] Implementar caso de uso 7 con Redis (sesión con TTL)
 - [ ] Agregar tests unitarios y de integración
 - [ ] Implementar logging estructurado (JSON logs)
 - [ ] Crear dashboard de visualización con Grafana
 - [ ] Dockerizar toda la aplicación (docker-compose)
 - [ ] Agregar CI/CD pipeline
-- [ ] Implementar cache de consultas frecuentes
+- [ ] Implementar cache de consultas frecuentes en Redis
 - [ ] Agregar métricas de performance
+- [ ] Implementar autenticación JWT para sesiones de periodistas
 
 ## 📄 Licencia
 
